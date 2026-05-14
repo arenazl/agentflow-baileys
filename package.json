@@ -1,0 +1,21 @@
+{
+  "name": "agentflow-baileys",
+  "version": "1.0.0",
+  "description": "Servicio Node.js que conecta Baileys (WhatsApp Web) con AgentFlow. Sesion persistida en MySQL Aiven via AgentFlow API.",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": "20.x"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "express": "^4.21.2",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4",
+    "undici": "^7.2.0"
+  }
+}
