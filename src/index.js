@@ -85,10 +85,22 @@ async function startBaileys() {
   })
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return
+    logger.info({ type, count: messages.length }, '[upsert] evento recibido')
     for (const msg of messages) {
-      if (msg.key.fromMe) continue
-      if (!msg.key.remoteJid?.endsWith('@s.whatsapp.net')) continue
+      logger.info({
+        fromMe: msg.key.fromMe,
+        remoteJid: msg.key.remoteJid,
+        id: msg.key.id,
+        pushName: msg.pushName,
+        hasMessage: !!msg.message,
+        messageKeys: msg.message ? Object.keys(msg.message) : null,
+      }, '[upsert] msg detail')
+
+      if (msg.key.fromMe) { logger.info('  skip: fromMe'); continue }
+      if (!msg.key.remoteJid?.endsWith('@s.whatsapp.net')) {
+        logger.info({ jid: msg.key.remoteJid }, '  skip: jid no individual')
+        continue
+      }
 
       const phoneRaw = msg.key.remoteJid.split('@')[0]
       const telefono = '+' + phoneRaw
@@ -100,7 +112,7 @@ async function startBaileys() {
         msg.message?.videoMessage?.caption ||
         '[mensaje no soportado]'
 
-      logger.info({ telefono, nombre, contenido: contenido.slice(0, 80) }, 'Mensaje entrante')
+      logger.info({ telefono, nombre, contenido: contenido.slice(0, 80) }, 'Mensaje entrante PROCESANDO')
 
       try {
         const res = await fetch(`${AGENTFLOW_API_URL}/whatsapp/webhook/incoming`, {
