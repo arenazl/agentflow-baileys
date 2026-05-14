@@ -90,20 +90,37 @@ async function startBaileys() {
       logger.info({
         fromMe: msg.key.fromMe,
         remoteJid: msg.key.remoteJid,
+        senderPn: msg.key.senderPn,
         id: msg.key.id,
         pushName: msg.pushName,
         hasMessage: !!msg.message,
-        messageKeys: msg.message ? Object.keys(msg.message) : null,
       }, '[upsert] msg detail')
 
       if (msg.key.fromMe) { logger.info('  skip: fromMe'); continue }
-      if (!msg.key.remoteJid?.endsWith('@s.whatsapp.net')) {
-        logger.info({ jid: msg.key.remoteJid }, '  skip: jid no individual')
+      const jid = msg.key.remoteJid
+      // Aceptamos chats individuales (s.whatsapp.net) Y nuevos LID (@lid)
+      // Filtramos solo grupos (@g.us) y broadcasts (@broadcast)
+      if (!jid || jid.endsWith('@g.us') || jid.endsWith('@broadcast')) {
+        logger.info({ jid }, '  skip: grupo/broadcast')
         continue
       }
 
-      const phoneRaw = msg.key.remoteJid.split('@')[0]
-      const telefono = '+' + phoneRaw
+      // Resolver telefono: si tiene @s.whatsapp.net usamos el numero,
+      // si es @lid intentamos senderPn (phone number publico) o usamos el LID como id.
+      let telefono
+      if (jid.endsWith('@s.whatsapp.net')) {
+        telefono = '+' + jid.split('@')[0]
+      } else if (jid.endsWith('@lid')) {
+        if (msg.key.senderPn) {
+          telefono = '+' + msg.key.senderPn.split('@')[0]
+        } else {
+          // Sin numero accesible, usamos el JID completo como identifier
+          telefono = jid
+        }
+      } else {
+        telefono = jid
+      }
+
       const nombre = msg.pushName || null
       const contenido =
         msg.message?.conversation ||
@@ -112,7 +129,7 @@ async function startBaileys() {
         msg.message?.videoMessage?.caption ||
         '[mensaje no soportado]'
 
-      logger.info({ telefono, nombre, contenido: contenido.slice(0, 80) }, 'Mensaje entrante PROCESANDO')
+      logger.info({ telefono, jid, nombre, contenido: contenido.slice(0, 80) }, 'Mensaje entrante PROCESANDO')
 
       try {
         const res = await fetch(`${AGENTFLOW_API_URL}/whatsapp/webhook/incoming`, {
@@ -195,11 +212,21 @@ app.post('/send', requireKey, async (req, res) => {
   if (!telefono || !contenido) {
     return res.status(400).json({ ok: false, error: 'telefono y contenido requeridos' })
   }
-  const phone = telefono.replace(/[^0-9]/g, '')
-  const jid = `${phone}@s.whatsapp.net`
+
+  // Resolver JID:
+  // - Si telefono ya es un JID (contiene @), usarlo tal cual
+  // - Si empieza con +, es numero E.164 → construir s.whatsapp.net JID
+  let jid
+  if (telefono.includes('@')) {
+    jid = telefono
+  } else {
+    const phone = telefono.replace(/[^0-9]/g, '')
+    jid = `${phone}@s.whatsapp.net`
+  }
 
   try {
     const result = await sock.sendMessage(jid, { text: contenido })
+    logger.info({ jid }, 'Mensaje enviado')
     res.json({ ok: true, meta_message_id: result?.key?.id || null })
   } catch (err) {
     logger.error({ err: err.message, jid }, 'Error enviando')
