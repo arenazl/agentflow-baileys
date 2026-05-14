@@ -105,21 +105,17 @@ async function startBaileys() {
         continue
       }
 
-      // Resolver telefono: si tiene @s.whatsapp.net usamos el numero,
-      // si es @lid intentamos senderPn (phone number publico) o usamos el LID como id.
-      let telefono
-      if (jid.endsWith('@s.whatsapp.net')) {
-        telefono = '+' + jid.split('@')[0]
-      } else if (jid.endsWith('@lid')) {
-        if (msg.key.senderPn) {
-          telefono = '+' + msg.key.senderPn.split('@')[0]
-        } else {
-          // Sin numero accesible, usamos el JID completo como identifier
-          telefono = jid
-        }
-      } else {
-        telefono = jid
-      }
+      // CRITICO: usar SIEMPRE el remoteJid original como "telefono".
+      // Esto es la identidad criptografica con la que tenemos sesion Signal-Protocol.
+      // Si respondemos a otro JID (ej: el phone real cuando vino por @lid),
+      // el cliente recibe el mensaje pero no puede desencriptarlo
+      // (aparece "Esperando el mensaje" en el chat del cliente).
+      const telefono = jid
+
+      // Numero de phone publico (si esta disponible) - solo para mostrar en CRM/matching
+      const phonePublico = msg.key.senderPn
+        ? '+' + msg.key.senderPn.split('@')[0]
+        : (jid.endsWith('@s.whatsapp.net') ? '+' + jid.split('@')[0] : null)
 
       const nombre = msg.pushName || null
       const contenido =
@@ -129,7 +125,7 @@ async function startBaileys() {
         msg.message?.videoMessage?.caption ||
         '[mensaje no soportado]'
 
-      logger.info({ telefono, jid, nombre, contenido: contenido.slice(0, 80) }, 'Mensaje entrante PROCESANDO')
+      logger.info({ telefono, phonePublico, nombre, contenido: contenido.slice(0, 80) }, 'Mensaje entrante PROCESANDO')
 
       try {
         const res = await fetch(`${AGENTFLOW_API_URL}/whatsapp/webhook/incoming`, {
@@ -137,6 +133,7 @@ async function startBaileys() {
           headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
           body: JSON.stringify({
             telefono,
+            phone_publico: phonePublico,
             nombre_contacto: nombre,
             contenido,
             meta_message_id: msg.key.id,
