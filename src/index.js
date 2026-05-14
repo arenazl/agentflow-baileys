@@ -15,6 +15,8 @@
 import {
   default as makeWASocket,
   DisconnectReason,
+  fetchLatestBaileysVersion,
+  Browsers,
 } from '@whiskeysockets/baileys'
 import express from 'express'
 import qrcodeLib from 'qrcode'
@@ -36,13 +38,18 @@ let lastError = null
 
 async function startBaileys() {
   const { state, saveCreds } = await useRemoteAuthState()
+  const { version } = await fetchLatestBaileysVersion()
+  logger.info({ version }, 'Usando version de WhatsApp Web')
 
   sock = makeWASocket({
+    version,
     auth: state,
     printQRInTerminal: false,
     logger: pino({ level: 'silent' }),
+    browser: Browsers.macOS('AgentFlow'),
     syncFullHistory: false,
     markOnlineOnConnect: true,
+    generateHighQualityLinkPreview: false,
   })
 
   sock.ev.on('creds.update', saveCreds)
