@@ -35,6 +35,10 @@ let isReady = false
 let lastQR = null  // string del QR para mostrar via /qr
 let lastUser = null
 let lastError = null
+let isReadySince = null      // timestamp del ultimo isReady=true
+let lastNotReadySince = null // timestamp desde que esta down
+let restartCount = 0          // cuantas veces reinicio el watchdog
+let reconnectInProgress = false
 
 async function startBaileys() {
   const { state, saveCreds } = await useRemoteAuthState()
@@ -64,21 +68,28 @@ async function startBaileys() {
 
     if (connection === 'open') {
       isReady = true
+      isReadySince = Date.now()
+      lastNotReadySince = null
       lastQR = null
       lastError = null
       lastUser = sock.user?.id || null
-      logger.info({ user: lastUser }, 'Conectado a WhatsApp')
+      logger.info({ user: lastUser, restartCount }, 'Conectado a WhatsApp')
     }
 
     if (connection === 'close') {
       isReady = false
+      lastNotReadySince = lastNotReadySince || Date.now()
       const code = lastDisconnect?.error?.output?.statusCode
       const shouldReconnect = code !== DisconnectReason.loggedOut
       lastError = lastDisconnect?.error?.message || `code ${code}`
       logger.warn({ code, shouldReconnect, err: lastError }, 'Conexion cerrada')
-      if (shouldReconnect) {
-        setTimeout(startBaileys, 3000)
-      } else {
+      if (shouldReconnect && !reconnectInProgress) {
+        reconnectInProgress = true
+        setTimeout(() => {
+          reconnectInProgress = false
+          startBaileys().catch((err) => logger.error({ err: err.message }, 'Reconnect fallo'))
+        }, 3000)
+      } else if (!shouldReconnect) {
         logger.error('Sesion cerrada por logout. Borrar baileys_auth en la DB y reescanear QR.')
       }
     }
@@ -231,11 +242,69 @@ app.post('/send', requireKey, async (req, res) => {
   }
 })
 
+// === WATCHDOG: si el bot esta down > 3 min, fuerza un restart limpio ===
+const WATCHDOG_INTERVAL_MS = 60 * 1000          // chequear cada 60s
+const MAX_DOWN_MS = 3 * 60 * 1000               // tolera hasta 3 min down
+const MAX_RESTARTS_PER_HOUR = 10                // safety
+
+let restartTimestamps = []
+
+setInterval(async () => {
+  // Limpiar restarts viejos (> 1h)
+  const oneHourAgo = Date.now() - 3600 * 1000
+  restartTimestamps = restartTimestamps.filter((t) => t > oneHourAgo)
+
+  if (isReady) return  // todo OK
+
+  const downMs = Date.now() - (lastNotReadySince || Date.now())
+  logger.warn({ downMs, baileys_ready: isReady, restartsLastHour: restartTimestamps.length }, '[watchdog] bot esta down')
+
+  if (downMs < MAX_DOWN_MS) return  // todavia dentro del tiempo de gracia
+
+  if (restartTimestamps.length >= MAX_RESTARTS_PER_HOUR) {
+    logger.error({ count: restartTimestamps.length }, '[watchdog] demasiados restarts en 1h, parando')
+    return
+  }
+
+  if (reconnectInProgress) {
+    logger.info('[watchdog] ya hay un reconnect en progreso, espero')
+    return
+  }
+
+  logger.warn('[watchdog] forzando restart de Baileys')
+  restartCount++
+  restartTimestamps.push(Date.now())
+  reconnectInProgress = true
+  try {
+    if (sock) {
+      try { await sock.end() } catch {}
+    }
+    sock = null
+    isReady = false
+    await startBaileys()
+  } catch (err) {
+    logger.error({ err: err.message }, '[watchdog] restart fallo')
+  } finally {
+    reconnectInProgress = false
+  }
+}, WATCHDOG_INTERVAL_MS)
+
+// === ERROR HANDLERS: prevenir muerte silenciosa del proceso ===
+process.on('uncaughtException', (err) => {
+  logger.error({ err: err.message, stack: err.stack }, '[process] uncaughtException — no muere, sigue corriendo')
+})
+
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason)
+  logger.error({ reason: msg }, '[process] unhandledRejection — no muere, sigue corriendo')
+})
+
+// === START ===
 app.listen(PORT, () => {
   logger.info(`AgentFlow Baileys escuchando en :${PORT}`)
   logger.info(`AGENTFLOW_API_URL: ${AGENTFLOW_API_URL}`)
+  lastNotReadySince = Date.now()
   startBaileys().catch((err) => {
-    logger.error({ err: err.message }, 'Error iniciando Baileys')
-    process.exit(1)
+    logger.error({ err: err.message }, 'Error iniciando Baileys (continua corriendo, watchdog reintentara)')
   })
 })
